@@ -92,7 +92,8 @@ cv-yolo-pipeline/
 │   ├── event_logger.py
 │   └── reporting.py
 ├── dashboard/
-│   └── app.py
+│   ├── app.py
+│   └── live_server.py
 ├── utils/
 │   └── config_resolver.py
 ├── docs/
@@ -156,10 +157,24 @@ The app resolves this at runtime from `.env`.
 
 ## Running the Dashboard
 
+The dashboard runs on Streamlit port `8501`. The fast camera stream runs on MJPEG port `8765` and is started automatically when you open a backend live preview.
+
 ```bash
 cd ~/cv-yolo-pipeline
 source .venv/bin/activate
 streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501
+```
+
+Optional manual MJPEG server start:
+
+```bash
+python dashboard/live_server.py --host 127.0.0.1 --port 8765
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8765/health
 ```
 
 Open:
@@ -209,7 +224,7 @@ sudo ufw reload
 
 ### Cloud VM Security Group
 
-If deployed on a cloud VM, allow inbound TCP port `8501` from your IP only. Do not expose the dashboard publicly without authentication.
+If deployed on a cloud VM, allow inbound TCP port `8501` from your IP only. Keep `8765` private/internal unless you intentionally need remote MJPEG access, because it streams live camera frames. Do not expose the dashboard publicly without authentication.
 
 ## Camera Configuration
 
@@ -272,6 +287,36 @@ From **Control Room**:
   - The browser plays a short beep when the server reports a cheating alert after you click **Enable sound** inside the live tile once.
 
 You can also toggle any configured camera in **Configured cameras**.
+
+## Face-Direction Tracking and Cheating Alert
+
+The backend live stream applies a lightweight real-time face-direction check on every camera frame:
+
+- **Green tracking box**: a frontal face is detected and the candidate is looking forward.
+- **Red tracking box**: the face turns sideways, the face disappears, or the detector cannot confirm a forward-facing face.
+- **Sound alert**: click **Enable sound** inside the live tile once. After that, the browser plays a beep whenever `/status/<camera_id>` reports `cheating_alert: true`.
+
+Live status API:
+
+```bash
+curl http://127.0.0.1:8765/status/cam_webcam
+```
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "camera_id": "cam_webcam",
+  "running": true,
+  "face_found": true,
+  "direction": "front",
+  "cheating_alert": false,
+  "yaw_score": 0.0
+}
+```
+
+The uploaded `camera.py` concept was integrated into `dashboard/live_server.py`: it keeps `cv2.VideoCapture(source)` open continuously, reads frames in a background thread, overlays the tracking/alert state, then streams MJPEG to the dashboard instead of using `cv2.imshow()`.
 
 ## Running Detection Without Dashboard
 
@@ -353,7 +398,7 @@ outputs/
 Syntax check:
 
 ```bash
-python -m py_compile main.py dashboard/app.py analysis/*.py events/*.py cameras/*.py detectors/*.py utils/*.py
+python -m py_compile main.py dashboard/app.py dashboard/live_server.py analysis/*.py events/*.py cameras/*.py detectors/*.py utils/*.py
 ```
 
 Smoke test:
@@ -374,11 +419,30 @@ Check dashboard HTTP response:
 curl -I http://127.0.0.1:8501
 ```
 
+Check MJPEG live server:
+
+```bash
+curl http://127.0.0.1:8765/health
+curl http://127.0.0.1:8765/status/cam_webcam
+```
+
+Check that the MJPEG feed returns multipart JPEG frames:
+
+```bash
+python - <<'PY'
+import urllib.request
+u = urllib.request.urlopen('http://127.0.0.1:8765/video_feed/cam_webcam', timeout=5)
+b = u.read(2048)
+print('multipart:', b.startswith(b'--frame'), 'bytes:', len(b))
+PY
+```
+
 ## Security Notes
 
 - Never commit `.env`
 - Never commit real RTSP usernames/passwords
 - Do not expose port `8501` to the public internet without authentication
+- Do not expose MJPEG port `8765` publicly; it streams live camera frames
 - Restrict cloud firewall/security-group access to trusted IPs
 - Store real camera credentials in environment variables or secrets manager
 
