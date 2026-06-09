@@ -5,6 +5,8 @@ import json
 import subprocess
 import sys
 import time
+import urllib.request
+import urllib.error
 import cv2
 import numpy as np
 from datetime import datetime
@@ -27,6 +29,7 @@ EVENTS_PATH = ROOT / 'outputs/events/events.jsonl'
 CSV_PATH = ROOT / 'outputs/events/events.csv'
 SUMMARY_PATH = ROOT / 'outputs/reports/summary.json'
 SNAP_ROOT = ROOT / 'outputs/snapshots'
+LIVE_SERVER_URL = 'http://127.0.0.1:8765'
 
 st.set_page_config(page_title='ExamVision Command Center', page_icon='▣', layout='wide', initial_sidebar_state='collapsed')
 
@@ -50,6 +53,8 @@ CSS = '''
 .camera-head { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--line); color:#dce8fb; }
 .camera-feed { aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#111827,#020617); position:relative; }
 .camera-empty { color:var(--muted); font-size:13px; }
+.live-frame { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:14px; display:block; }
+.live-wrap { border:1px solid var(--line); border-radius:18px; overflow:hidden; background:#000; }
 .browser-cam-box { border:1px solid var(--line); border-radius:18px; overflow:hidden; background:#020617; margin-top:10px; }
 .badge { border:1px solid var(--line-strong); border-radius:999px; padding:4px 9px; font-size:12px; color:#cbd5e1; background:rgba(15,23,42,.72); }
 .badge-ok { border-color:rgba(34,197,94,.38); color:#bbf7d0; background:rgba(34,197,94,.10); }
@@ -126,6 +131,116 @@ def set_laptop_only():
         data.setdefault('cameras', []).append({'id': 'cam_webcam', 'name': 'Laptop Camera', 'location': 'Local machine', 'source': 0, 'fps_sample': 5, 'active': True, 'type': 'local'})
     save_yaml(CAMERAS_PATH, data)
     return data
+
+def ensure_live_server(timeout_sec: float = 4.0):
+    try:
+        with urllib.request.urlopen(f'{LIVE_SERVER_URL}/health', timeout=0.5) as resp:
+            if resp.status == 200:
+                return True, 'Live server already running'
+    except Exception:
+        pass
+
+    proc = st.session_state.get('live_server_proc')
+    if proc is None or proc.poll() is not None:
+        st.session_state['live_server_proc'] = subprocess.Popen(
+            [sys.executable, str(ROOT / 'dashboard/live_server.py'), '--host', '127.0.0.1', '--port', '8765'],
+            cwd=str(ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        try:
+            with urllib.request.urlopen(f'{LIVE_SERVER_URL}/health', timeout=0.5) as resp:
+                if resp.status == 200:
+                    return True, 'Live server started'
+        except Exception:
+            time.sleep(0.15)
+    return False, 'Live server did not start on port 8765'
+
+
+def mjpeg_url(camera_id: str):
+    return f'{LIVE_SERVER_URL}/video_feed/{camera_id}?t={int(time.time())}'
+
+
+def stop_mjpeg(camera_id: str | None = None):
+    endpoint = 'stop_all' if camera_id is None else f'stop/{camera_id}'
+    try:
+        req = urllib.request.Request(f'{LIVE_SERVER_URL}/{endpoint}', method='POST')
+        urllib.request.urlopen(req, timeout=0.5).read()
+    except Exception:
+        pass
+
+
+def render_mjpeg(camera_id: str, title: str = '', height: int = 430):
+    safe_title = title or camera_id
+    element_id = f'live_{camera_id}_{int(time.time())}'.replace('-', '_')
+    components.html(f'''
+    <div style="background:#000;border:1px solid rgba(148,163,184,.25);border-radius:16px;overflow:hidden;">
+      <img src="{mjpeg_url(camera_id)}" style="display:block;width:100%;height:auto;max-height:{height}px;object-fit:contain;background:#000;" />
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px 10px;background:#020617;">
+        <div id="{element_id}_status" style="color:#8fa2bd;font:12px Inter,Arial,sans-serif;">LIVE MJPEG · {safe_title} · tracking...</div>
+        <button id="{element_id}_sound" style="border:1px solid rgba(245,158,11,.55);background:rgba(245,158,11,.14);color:#fde68a;border-radius:999px;padding:5px 9px;font:700 11px Inter,Arial;cursor:pointer;">Enable sound</button>
+      </div>
+    </div>
+    <script>
+      const statusEl_{element_id} = document.getElementById('{element_id}_status');
+      const soundBtn_{element_id} = document.getElementById('{element_id}_sound');
+      let audioCtx_{element_id} = null;
+      let soundEnabled_{element_id} = false;
+      let lastBeep_{element_id} = 0;
+      soundBtn_{element_id}.onclick = async () => {{
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        audioCtx_{element_id} = audioCtx_{element_id} || new AudioContext();
+        await audioCtx_{element_id}.resume();
+        soundEnabled_{element_id} = true;
+        soundBtn_{element_id}.textContent = 'Sound ON';
+      }};
+      function beep_{element_id}() {{
+        const now = Date.now();
+        if (now - lastBeep_{element_id} < 1800) return;
+        lastBeep_{element_id} = now;
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext || !soundEnabled_{element_id}) return;
+        const ctx = audioCtx_{element_id} || new AudioContext();
+        audioCtx_{element_id} = ctx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      }}
+      async function poll_{element_id}() {{
+        try {{
+          const res = await fetch('{LIVE_SERVER_URL}/status/{camera_id}?t=' + Date.now());
+          const data = await res.json();
+          if (data.cheating_alert) {{
+            statusEl_{element_id}.style.color = '#fecaca';
+            statusEl_{element_id}.style.background = '#3b0a0a';
+            statusEl_{element_id}.textContent = '⚠️ CHEATING ALERT · face direction: ' + data.direction + ' · sound alert';
+            beep_{element_id}();
+          }} else {{
+            statusEl_{element_id}.style.color = '#bbf7d0';
+            statusEl_{element_id}.style.background = '#052e16';
+            statusEl_{element_id}.textContent = '✅ OK · looking front · tracked';
+          }}
+        }} catch (e) {{
+          statusEl_{element_id}.textContent = 'LIVE MJPEG · {safe_title} · status unavailable';
+        }}
+      }}
+      setInterval(poll_{element_id}, 550);
+      poll_{element_id}();
+    </script>
+    ''', height=height + 54)
+
 
 def parse_camera_source(source):
     value = resolve_value(source)
@@ -338,31 +453,25 @@ with main_tab:
 
 with wall_tab:
     st.markdown('<div class="panel"><div class="panel-title">Multi-camera wall</div>', unsafe_allow_html=True)
-    wall_live = st.toggle('Live camera wall', value=bool(st.session_state.get('wall_live', False)), help='Keep active camera streams open and refresh the wall automatically.')
+    wall_live = st.toggle('Live camera wall', value=bool(st.session_state.get('wall_live', False)), help='Low-latency MJPEG tiles. No Streamlit rerun loop.')
     st.session_state['wall_live'] = wall_live
-    if not wall_live:
-        release_live_capture()
     imgs=latest_annotated(); cols=st.columns(3); wall_items=active_cams or cams or [{'id':'camera_1','name':'CLI Source','location':'local'}]
+    if wall_live:
+        ok,msg = ensure_live_server()
+        if not ok:
+            st.error(msg)
     for i,cam in enumerate(wall_items):
         with cols[i%3]:
             st.markdown('<div class="camera-card">', unsafe_allow_html=True)
             status_badge = 'live' if wall_live and cam.get('active') else 'idle'
             st.markdown(f'<div class="camera-head"><strong>{cam.get("id")}</strong><span class="badge badge-ok">{status_badge}</span></div>', unsafe_allow_html=True)
             if wall_live and cam.get('active'):
-                frame, info = read_live_frame(str(cam.get('id')), cam.get('source'))
-                if frame is not None:
-                    st.image(frame, width='stretch', channels='RGB')
-                    st.markdown(f'<div class="small-muted" style="padding:0 12px 8px;">Live · {info}</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="camera-feed"><div class="camera-empty">{info}</div></div>', unsafe_allow_html=True)
+                render_mjpeg(str(cam.get('id')), f'{cam.get("name","Camera")} · {cam.get("location","Exam hall")}', height=260)
             else:
                 img=imgs[-1] if imgs else None
                 if img: st.image(str(img), width='stretch')
                 else: st.markdown('<div class="camera-feed"><div class="camera-empty">Turn on Live camera wall to stream active cameras.</div></div>', unsafe_allow_html=True)
             st.markdown(f'<div style="padding:10px 12px;color:#8fa2bd;font-size:12px;">{cam.get("name","Camera")} · {cam.get("location","Exam hall")}</div></div>', unsafe_allow_html=True)
-    if wall_live:
-        time.sleep(0.35)
-        st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 with alerts_tab:
@@ -419,6 +528,7 @@ with control_tab:
             set_laptop_camera(False)
             st.session_state['backend_live_running'] = False
             release_live_capture('cam_webcam')
+            stop_mjpeg('cam_webcam')
             st.session_state['camera_action_result'] = {'ok': True, 'message': 'Laptop camera disabled.'}
             st.rerun()
     with q3:
@@ -460,20 +570,18 @@ with control_tab:
         if st.button('Stop backend live preview'):
             st.session_state['backend_live_running'] = False
             release_live_capture(live_selected if live_selected != 'none' else None)
+            stop_mjpeg(live_selected if live_selected != 'none' else None)
             st.rerun()
 
     if st.session_state.get('backend_live_running') and live_selected != 'none':
-        selected_profile = next((c for c in preview_cams if c.get('id') == live_selected), None)
-        if selected_profile:
-            frame, info = read_live_frame(live_selected, selected_profile.get('source'))
-            if frame is not None:
-                st.image(frame, caption=f'LIVE · {live_selected} · {info}', width='stretch', channels='RGB')
-            else:
-                st.error(info)
-                st.session_state['backend_live_running'] = False
-                release_live_capture(live_selected)
-            time.sleep(0.25)
-            st.rerun()
+        ok,msg = ensure_live_server()
+        if ok:
+            selected_profile = next((c for c in preview_cams if c.get('id') == live_selected), None)
+            if selected_profile:
+                render_mjpeg(live_selected, f'{selected_profile.get("name", live_selected)} · {selected_profile.get("location", "")}', height=520)
+                st.caption('Fast MJPEG stream: camera stays open in a background Flask server; the browser displays frames directly without Streamlit reruns.')
+        else:
+            st.error(msg)
 
     st.divider()
     st.subheader('Add camera from dashboard')

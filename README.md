@@ -23,6 +23,9 @@ The project is designed for a multi-camera examination room setup. It can read f
 - Event logs as JSONL and CSV
 - Summary reports
 - Professional Streamlit dashboard for invigilators
+- Low-latency MJPEG live streaming via `dashboard/live_server.py`
+- Live candidate tracking overlay: green while face is forward, red when the face turns sideways or disappears
+- Browser sound alert when the live server reports a cheating state
 
 ## Dashboard Screenshots
 
@@ -200,6 +203,7 @@ For local-only development, no external port opening is needed because the app r
 
 ```bash
 sudo ufw allow 8501/tcp
+sudo ufw allow 8765/tcp  # optional: MJPEG live server, keep private if possible
 sudo ufw reload
 ```
 
@@ -260,8 +264,12 @@ From **Control Room**:
 - Click **Turn laptop camera ON** to activate `cam_webcam` and start the backend live preview.
 - Click **Turn laptop camera OFF** to deactivate it and release the backend camera handle.
 - Use **Start browser camera** in the Browser laptop camera permission panel if you want the browser itself to request webcam permission and show a true live client-side preview.
-- Use **Start backend live preview** to stream any configured source through OpenCV: laptop camera, RTSP/IP camera, image/video source, or demo.
-- Use **Camera Wall → Live camera wall** to keep active cameras refreshing as live tiles.
+- Use **Start backend live preview** to stream any configured source through the low-latency MJPEG server on port `8765`: laptop camera, RTSP/IP camera, image/video source, or demo.
+- Use **Camera Wall → Live camera wall** to keep active cameras refreshing as live MJPEG tiles without Streamlit rerun lag.
+- The live stream draws a candidate tracking box:
+  - Green: candidate is facing forward.
+  - Red: candidate turns face left/right or no face is visible.
+  - The browser plays a short beep when the server reports a cheating alert after you click **Enable sound** inside the live tile once.
 
 You can also toggle any configured camera in **Configured cameras**.
 
