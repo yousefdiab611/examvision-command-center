@@ -129,20 +129,37 @@ def test_camera_source(source, timeout_sec: float = 6.0):
     start = time.time()
     ok = False
     frame = None
+    brightest_frame = None
+    brightest_mean = -1.0
+
+    # Laptop webcams often return the first 1-3 frames nearly black while exposure warms up.
+    # Do not show the first successful frame blindly; wait for a usable frame.
     while time.time() - start < timeout_sec:
-        ok, frame = cap.read()
-        if ok and frame is not None:
-            break
+        ok, candidate = cap.read()
+        if ok and candidate is not None:
+            mean_brightness = float(candidate.mean())
+            if mean_brightness > brightest_mean:
+                brightest_mean = mean_brightness
+                brightest_frame = candidate
+            if mean_brightness >= 15.0:
+                frame = candidate
+                break
         time.sleep(0.15)
     cap.release()
-    if not ok or frame is None:
+
+    if frame is None and brightest_frame is not None and brightest_mean >= 5.0:
+        frame = brightest_frame
+    if frame is None:
+        if brightest_frame is not None:
+            return {'ok': False, 'message': f'Camera opened but frames are almost black (brightness {brightest_mean:.1f}). Check lens cover, room light, macOS camera permission, or another app using the camera.'}
         return {'ok': False, 'message': 'No frame received from camera'}
+
     out_dir = ROOT / 'outputs/snapshots/camera_tests'
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f'test_{int(time.time())}.jpg'
     cv2.imwrite(str(out), frame)
     h, w = frame.shape[:2]
-    return {'ok': True, 'message': f'Frame received: {w}x{h}', 'snapshot': str(out)}
+    return {'ok': True, 'message': f'Frame received: {w}x{h} · brightness {float(frame.mean()):.1f}', 'snapshot': str(out)}
 
 def load_events():
     if not EVENTS_PATH.exists():
