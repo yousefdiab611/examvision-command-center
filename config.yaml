@@ -1,0 +1,48 @@
+project:
+  name: cv-yolo-pipeline
+  output_dir: outputs
+
+camera:
+  default_source: 0
+  fps_sample: 5
+  max_frames: 0
+  profiles_path: configs/cameras.yaml
+
+model:
+  yolo_weights: yolov8n.pt
+  imgsz: 640
+  conf: 0.35
+  iou: 0.45
+  classes:
+    person: 0
+
+tracking:
+  enabled: true
+  tracker: bytetrack.yaml
+  motion_threshold_px: 18
+
+face_eye:
+  enabled: true
+  engine: opencv-haar
+  min_detection_confidence: 0.5
+  save_crops: true
+
+events:
+  save_snapshots: true
+  snapshot_conf_threshold: 0.50
+  jsonl_path: outputs/events/events.jsonl
+  csv_path: outputs/events/events.csv
+  summary_path: outputs/reports/summary.json
+
+nearby_objects:
+  enabled: true
+  max_center_distance_ratio: 1.30
+
+anomaly:
+  enabled: true
+  low_confidence_threshold: 0.45
+  face_required: false
+
+runtime:
+  save_annotated: true
+  show_window: false

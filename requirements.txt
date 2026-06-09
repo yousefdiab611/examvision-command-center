@@ -1,0 +1,8 @@
+ultralytics>=8.3.0
+opencv-python>=4.9.0
+mediapipe>=0.10.14
+lap>=0.5.12
+numpy>=1.24
+PyYAML>=6.0
+streamlit>=1.35
+pillow>=10.0

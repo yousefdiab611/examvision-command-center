@@ -1,0 +1,13 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+outputs/events/*.jsonl
+outputs/events/*.csv
+outputs/reports/*.json
+outputs/snapshots/**/*.jpg
+outputs/snapshots/**/*.png
+*.pt
+runs/
+.streamlit/secrets.toml

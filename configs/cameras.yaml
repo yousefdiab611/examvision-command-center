@@ -1,0 +1,29 @@
+cameras:
+- id: cam_demo
+  name: Demo Image
+  location: Built-in sample mode
+  source: demo
+  fps_sample: 1
+  active: false
+- id: cam_webcam
+  name: Laptop Camera
+  location: Local machine
+  source: 0
+  fps_sample: 5
+  active: false
+- id: cam_sample_image
+  name: Sample People Image
+  location: Local sample data
+  source: data/bus.jpg
+  fps_sample: 1
+  active: true
+- id: cam_tapo_c500_exam
+  name: Tapo C500
+  location: Smart AI-Based Exam Monitoring System
+  source: ${TAPO_C500_RTSP_URL}
+  fps_sample: 5
+  active: true
+  type: rtsp
+  ip: 192.168.1.10
+  model: Tapo C500
+  timezone: Africa/Cairo
