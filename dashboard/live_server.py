@@ -150,13 +150,15 @@ class CameraStream:
             eyes = self.eye_cascade.detectMultiScale(roi, scaleFactor=1.08, minNeighbors=4, minSize=(14, 14))
             bbox_small = (x, y, fw, fh)
             face_found = True
-            if len(eyes) >= 1:
+            if len(eyes) >= 2:
                 direction = 'front'
                 cheating = False
             else:
-                # Frontal face without eyes is suspicious but less noisy than profile.
-                direction = 'front_uncertain'
-                cheating = False
+                # If the face is detected but both eyes are not clearly visible, treat it as a suspected
+                # look-away/down/side case. This catches cases like the screenshot where the head is
+                # tilted and the old logic incorrectly showed green `front_uncertain`.
+                direction = 'look_away_uncertain'
+                cheating = True
         else:
             profiles = self.profile_cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(55, 55))
             if len(profiles):

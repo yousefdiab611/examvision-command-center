@@ -293,7 +293,7 @@ You can also toggle any configured camera in **Configured cameras**.
 The backend live stream applies a lightweight real-time face-direction check on every camera frame:
 
 - **Green tracking box**: a frontal face is detected and the candidate is looking forward.
-- **Red tracking box**: the face turns sideways, the face disappears, or the detector cannot confirm a forward-facing face.
+- **Red tracking box**: the face turns sideways, looks down, disappears, or both eyes are not clearly visible (`look_away_uncertain`).
 - **Sound alert**: click **Enable sound** inside the live tile once. After that, the browser plays a beep whenever `/status/<camera_id>` reports `cheating_alert: true`.
 
 Live status API:
