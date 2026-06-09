@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import cv2
+import numpy as np
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import yaml
 
 from utils.config_resolver import resolve_value, safe_source_display
@@ -48,6 +50,7 @@ CSS = '''
 .camera-head { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--line); color:#dce8fb; }
 .camera-feed { aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#111827,#020617); position:relative; }
 .camera-empty { color:var(--muted); font-size:13px; }
+.browser-cam-box { border:1px solid var(--line); border-radius:18px; overflow:hidden; background:#020617; margin-top:10px; }
 .badge { border:1px solid var(--line-strong); border-radius:999px; padding:4px 9px; font-size:12px; color:#cbd5e1; background:rgba(15,23,42,.72); }
 .badge-ok { border-color:rgba(34,197,94,.38); color:#bbf7d0; background:rgba(34,197,94,.10); }
 .badge-warn { border-color:rgba(245,158,11,.42); color:#fde68a; background:rgba(245,158,11,.12); }
@@ -124,16 +127,67 @@ def set_laptop_only():
     save_yaml(CAMERAS_PATH, data)
     return data
 
+def parse_camera_source(source):
+    value = resolve_value(source)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return value
+
+
+def release_live_capture(camera_id: str | None = None):
+    caps = st.session_state.setdefault('live_caps', {})
+    if camera_id is None:
+        ids = list(caps.keys())
+    else:
+        ids = [camera_id]
+    for cid in ids:
+        cap = caps.pop(cid, None)
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+
+def read_live_frame(camera_id: str, source, warmup_reads: int = 3):
+    caps = st.session_state.setdefault('live_caps', {})
+    source_value = parse_camera_source(source)
+    if str(source_value).lower() == 'demo':
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        t = datetime.now().strftime('%H:%M:%S')
+        cv2.putText(frame, f'DEMO LIVE {t}', (80, 360), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (56, 189, 248), 4, cv2.LINE_AA)
+        return frame, 'demo generated frame'
+    cap = caps.get(camera_id)
+    if cap is None or not cap.isOpened():
+        cap = cv2.VideoCapture(source_value)
+        caps[camera_id] = cap
+        warmup_reads = max(warmup_reads, 8)
+    frame = None
+    last_error = 'No frame received from camera'
+    for _ in range(max(1, warmup_reads)):
+        ok, candidate = cap.read()
+        if ok and candidate is not None:
+            frame = candidate
+            if float(candidate.mean()) >= 15.0:
+                break
+        else:
+            last_error = 'Camera opened but frame read failed'
+        time.sleep(0.03)
+    if frame is None:
+        release_live_capture(camera_id)
+        return None, last_error
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    return frame, f'{frame.shape[1]}x{frame.shape[0]} · brightness {float(frame.mean()):.1f}'
+
+
 def test_camera_source(source, timeout_sec: float = 6.0):
-    cap = cv2.VideoCapture(resolve_value(int(source) if str(source).isdigit() else source))
+    cap = cv2.VideoCapture(parse_camera_source(source))
     start = time.time()
-    ok = False
     frame = None
     brightest_frame = None
     brightest_mean = -1.0
 
-    # Laptop webcams often return the first 1-3 frames nearly black while exposure warms up.
-    # Do not show the first successful frame blindly; wait for a usable frame.
+    # Laptop webcams often return the first frames nearly black while exposure warms up.
     while time.time() - start < timeout_sec:
         ok, candidate = cap.read()
         if ok and candidate is not None:
@@ -160,6 +214,44 @@ def test_camera_source(source, timeout_sec: float = 6.0):
     cv2.imwrite(str(out), frame)
     h, w = frame.shape[:2]
     return {'ok': True, 'message': f'Frame received: {w}x{h} · brightness {float(frame.mean()):.1f}', 'snapshot': str(out)}
+
+
+def browser_webcam_permission_component():
+    components.html('''
+    <div style="font-family:Inter,Arial,sans-serif;color:#e7eefc;background:#020617;border:1px solid rgba(148,163,184,.25);border-radius:18px;padding:14px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <div>
+          <div style="font-weight:800;font-size:15px;">Browser laptop camera permission</div>
+          <div id="camStatus" style="font-size:12px;color:#8fa2bd;margin-top:3px;">Click Start browser camera to request permission and show a true live preview.</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button id="startCam" style="border:1px solid rgba(56,189,248,.55);background:rgba(56,189,248,.16);color:#e0f2fe;border-radius:999px;padding:8px 12px;font-weight:700;cursor:pointer;">Start browser camera</button>
+          <button id="stopCam" style="border:1px solid rgba(239,68,68,.45);background:rgba(239,68,68,.12);color:#fecaca;border-radius:999px;padding:8px 12px;font-weight:700;cursor:pointer;">Stop</button>
+        </div>
+      </div>
+      <video id="webcam" autoplay playsinline muted style="width:100%;max-height:420px;object-fit:contain;background:#000;border-radius:14px;"></video>
+    </div>
+    <script>
+      const video = document.getElementById('webcam');
+      const status = document.getElementById('camStatus');
+      let stream = null;
+      document.getElementById('startCam').onclick = async () => {
+        try {
+          status.textContent = 'Requesting camera permission...';
+          stream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
+          video.srcObject = stream;
+          status.textContent = 'Live browser camera is running. Permission granted.';
+        } catch (err) {
+          status.textContent = 'Camera permission failed: ' + err.message;
+        }
+      };
+      document.getElementById('stopCam').onclick = () => {
+        if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
+        video.srcObject = null;
+        status.textContent = 'Browser camera stopped.';
+      };
+    </script>
+    ''', height=520)
 
 def load_events():
     if not EVENTS_PATH.exists():
@@ -246,15 +338,31 @@ with main_tab:
 
 with wall_tab:
     st.markdown('<div class="panel"><div class="panel-title">Multi-camera wall</div>', unsafe_allow_html=True)
+    wall_live = st.toggle('Live camera wall', value=bool(st.session_state.get('wall_live', False)), help='Keep active camera streams open and refresh the wall automatically.')
+    st.session_state['wall_live'] = wall_live
+    if not wall_live:
+        release_live_capture()
     imgs=latest_annotated(); cols=st.columns(3); wall_items=active_cams or cams or [{'id':'camera_1','name':'CLI Source','location':'local'}]
     for i,cam in enumerate(wall_items):
         with cols[i%3]:
-            img=imgs[-1] if imgs else None
             st.markdown('<div class="camera-card">', unsafe_allow_html=True)
-            st.markdown(f'<div class="camera-head"><strong>{cam.get("id")}</strong><span class="badge badge-ok">online</span></div>', unsafe_allow_html=True)
-            if img: st.image(str(img), width='stretch')
-            else: st.markdown('<div class="camera-feed"><div class="camera-empty">Waiting for stream</div></div>', unsafe_allow_html=True)
+            status_badge = 'live' if wall_live and cam.get('active') else 'idle'
+            st.markdown(f'<div class="camera-head"><strong>{cam.get("id")}</strong><span class="badge badge-ok">{status_badge}</span></div>', unsafe_allow_html=True)
+            if wall_live and cam.get('active'):
+                frame, info = read_live_frame(str(cam.get('id')), cam.get('source'))
+                if frame is not None:
+                    st.image(frame, width='stretch', channels='RGB')
+                    st.markdown(f'<div class="small-muted" style="padding:0 12px 8px;">Live · {info}</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="camera-feed"><div class="camera-empty">{info}</div></div>', unsafe_allow_html=True)
+            else:
+                img=imgs[-1] if imgs else None
+                if img: st.image(str(img), width='stretch')
+                else: st.markdown('<div class="camera-feed"><div class="camera-empty">Turn on Live camera wall to stream active cameras.</div></div>', unsafe_allow_html=True)
             st.markdown(f'<div style="padding:10px 12px;color:#8fa2bd;font-size:12px;">{cam.get("name","Camera")} · {cam.get("location","Exam hall")}</div></div>', unsafe_allow_html=True)
+    if wall_live:
+        time.sleep(0.35)
+        st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 with alerts_tab:
@@ -302,17 +410,23 @@ with control_tab:
     with q1:
         if st.button('Turn laptop camera ON'):
             set_laptop_camera(True)
-            st.session_state['camera_action_result'] = test_camera_source(0)
+            st.session_state['backend_live_camera'] = 'cam_webcam'
+            st.session_state['backend_live_running'] = True
+            st.session_state['camera_action_result'] = {'ok': True, 'message': 'Laptop camera enabled. Backend live preview is starting below.'}
             st.rerun()
     with q2:
         if st.button('Turn laptop camera OFF'):
             set_laptop_camera(False)
+            st.session_state['backend_live_running'] = False
+            release_live_capture('cam_webcam')
             st.session_state['camera_action_result'] = {'ok': True, 'message': 'Laptop camera disabled.'}
             st.rerun()
     with q3:
         if st.button('Use laptop only'):
             set_laptop_only()
-            st.session_state['camera_action_result'] = test_camera_source(0)
+            st.session_state['backend_live_camera'] = 'cam_webcam'
+            st.session_state['backend_live_running'] = True
+            st.session_state['camera_action_result'] = {'ok': True, 'message': 'Laptop-only mode enabled. Backend live preview is starting below.'}
             st.rerun()
     with q4:
         if st.button('Test laptop camera'):
@@ -326,6 +440,40 @@ with control_tab:
     with t2:
         if st.button('Disable Tapo C500'):
             set_camera_active('cam_tapo_c500_exam', False); st.success('Tapo C500 disabled.'); st.rerun()
+
+    st.divider()
+    st.subheader('Live preview')
+    st.caption('Laptop permission preview uses the browser. RTSP/IP cameras use the Python/OpenCV backend and stay open while live preview is running.')
+    browser_webcam_permission_component()
+
+    preview_cams = load_yaml(CAMERAS_PATH).get('cameras', [])
+    preview_ids = [c.get('id') for c in preview_cams if c.get('id')]
+    p1,p2,p3=st.columns([1.2,1,1])
+    with p1:
+        default_live_index = preview_ids.index('cam_webcam') if 'cam_webcam' in preview_ids else 0
+        live_selected = st.selectbox('Backend live camera', preview_ids if preview_ids else ['none'], index=default_live_index if preview_ids else 0, key='backend_live_camera')
+    with p2:
+        if st.button('Start backend live preview') and live_selected != 'none':
+            st.session_state['backend_live_running'] = True
+            st.rerun()
+    with p3:
+        if st.button('Stop backend live preview'):
+            st.session_state['backend_live_running'] = False
+            release_live_capture(live_selected if live_selected != 'none' else None)
+            st.rerun()
+
+    if st.session_state.get('backend_live_running') and live_selected != 'none':
+        selected_profile = next((c for c in preview_cams if c.get('id') == live_selected), None)
+        if selected_profile:
+            frame, info = read_live_frame(live_selected, selected_profile.get('source'))
+            if frame is not None:
+                st.image(frame, caption=f'LIVE · {live_selected} · {info}', width='stretch', channels='RGB')
+            else:
+                st.error(info)
+                st.session_state['backend_live_running'] = False
+                release_live_capture(live_selected)
+            time.sleep(0.25)
+            st.rerun()
 
     st.divider()
     st.subheader('Add camera from dashboard')

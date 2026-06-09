@@ -253,12 +253,15 @@ cameras:
 6. Click **Save camera profile**
 7. Click **Test camera connection** to verify frame capture
 
-## Laptop Camera ON/OFF
+## Laptop Camera ON/OFF and Live Preview
 
 From **Control Room**:
 
-- Click **Turn laptop camera ON** to activate `cam_webcam`
-- Click **Turn laptop camera OFF** to deactivate it
+- Click **Turn laptop camera ON** to activate `cam_webcam` and start the backend live preview.
+- Click **Turn laptop camera OFF** to deactivate it and release the backend camera handle.
+- Use **Start browser camera** in the Browser laptop camera permission panel if you want the browser itself to request webcam permission and show a true live client-side preview.
+- Use **Start backend live preview** to stream any configured source through OpenCV: laptop camera, RTSP/IP camera, image/video source, or demo.
+- Use **Camera Wall → Live camera wall** to keep active cameras refreshing as live tiles.
 
 You can also toggle any configured camera in **Configured cameras**.
 
