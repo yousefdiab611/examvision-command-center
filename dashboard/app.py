@@ -110,6 +110,20 @@ def set_laptop_camera(active: bool):
     profile = {'id': 'cam_webcam', 'name': 'Laptop Camera', 'location': 'Local machine', 'source': 0, 'fps_sample': 5, 'active': bool(active), 'type': 'local'}
     return upsert_camera_profile(profile)
 
+def set_laptop_only():
+    data = load_yaml(CAMERAS_PATH) or {'cameras': []}
+    found = False
+    for cam in data.get('cameras', []):
+        if cam.get('id') == 'cam_webcam':
+            cam.update({'name': 'Laptop Camera', 'location': 'Local machine', 'source': 0, 'fps_sample': 5, 'active': True, 'type': 'local'})
+            found = True
+        else:
+            cam['active'] = False
+    if not found:
+        data.setdefault('cameras', []).append({'id': 'cam_webcam', 'name': 'Laptop Camera', 'location': 'Local machine', 'source': 0, 'fps_sample': 5, 'active': True, 'type': 'local'})
+    save_yaml(CAMERAS_PATH, data)
+    return data
+
 def test_camera_source(source, timeout_sec: float = 6.0):
     cap = cv2.VideoCapture(resolve_value(int(source) if str(source).isdigit() else source))
     start = time.time()
@@ -259,17 +273,40 @@ with control_tab:
     cfg=load_yaml(CONFIG_PATH); cams_data=load_yaml(CAMERAS_PATH) or {'cameras':[]}
 
     st.subheader('Quick camera controls')
+    if st.session_state.get('camera_action_result'):
+        result = st.session_state.pop('camera_action_result')
+        if result.get('ok'):
+            st.success(result.get('message', 'Camera is working'))
+            if result.get('snapshot') and Path(result['snapshot']).exists():
+                st.image(result['snapshot'], width=420)
+        else:
+            st.error(result.get('message', 'Camera test failed'))
     q1,q2,q3,q4=st.columns(4)
     with q1:
         if st.button('Turn laptop camera ON'):
-            set_laptop_camera(True); st.success('Laptop camera enabled.'); st.rerun()
+            set_laptop_camera(True)
+            st.session_state['camera_action_result'] = test_camera_source(0)
+            st.rerun()
     with q2:
         if st.button('Turn laptop camera OFF'):
-            set_laptop_camera(False); st.success('Laptop camera disabled.'); st.rerun()
+            set_laptop_camera(False)
+            st.session_state['camera_action_result'] = {'ok': True, 'message': 'Laptop camera disabled.'}
+            st.rerun()
     with q3:
+        if st.button('Use laptop only'):
+            set_laptop_only()
+            st.session_state['camera_action_result'] = test_camera_source(0)
+            st.rerun()
+    with q4:
+        if st.button('Test laptop camera'):
+            st.session_state['camera_action_result'] = test_camera_source(0)
+            st.rerun()
+
+    t1,t2=st.columns(2)
+    with t1:
         if st.button('Enable Tapo C500'):
             upsert_camera_profile({'id':'cam_tapo_c500_exam','name':'Tapo C500','location':'Smart AI-Based Exam Monitoring System','source':'${TAPO_C500_RTSP_URL}','fps_sample':5,'active':True,'type':'rtsp','ip':'192.168.1.10','model':'Tapo C500','timezone':'Africa/Cairo'}); st.success('Tapo C500 enabled.'); st.rerun()
-    with q4:
+    with t2:
         if st.button('Disable Tapo C500'):
             set_camera_active('cam_tapo_c500_exam', False); st.success('Tapo C500 disabled.'); st.rerun()
 

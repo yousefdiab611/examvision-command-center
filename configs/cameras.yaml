@@ -11,6 +11,7 @@ cameras:
   source: 0
   fps_sample: 5
   active: false
+  type: local
 - id: cam_sample_image
   name: Sample People Image
   location: Local sample data
